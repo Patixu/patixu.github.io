@@ -75,8 +75,43 @@
 	<div id="openfl-content"></div>
 	
 	<script type="text/javascript">
-		// Configura o enquadramento sem limitar a resolução por DPR
 		lime.embed ("Funkin", "openfl-content", 0, 0, { parameters: {} });
+	</script>
+
+	<!-- Script de intercepção e corte imediato de áudio na WebView -->
+	<script>
+		function killAllAudio() {
+			// 1. Pausa e silencia qualquer elemento HTML5 de áudio/vídeo
+			document.querySelectorAll("audio, video").forEach(el => {
+				el.pause();
+				el.currentTime = 0;
+				el.muted = true;
+			});
+
+			// 2. Tenta suspender contextos do Web Audio API ativos
+			if (window.AudioContext || window.webkitAudioContext) {
+				try {
+					if (window.Howler && typeof window.Howler.unload === 'function') {
+						window.Howler.unload();
+					}
+				} catch (e) {}
+			}
+
+			// 3. Força o elemento do jogo a pausar se houver API global do OpenFL/Flixel
+			try {
+				if (window.FlxG && window.FlxG.sound) {
+					window.FlxG.sound.muted = true;
+				}
+			} catch (e) {}
+		}
+
+		// Dispara imediatamente assim que o usuário fecha a WebView ou sai da página interna
+		document.addEventListener("visibilitychange", () => {
+			if (document.hidden) killAllAudio();
+		});
+		window.addEventListener("blur", killAllAudio);
+		window.addEventListener("pagehide", killAllAudio);
+		window.addEventListener("beforeunload", killAllAudio);
 	</script>
 </body>
 </html>
