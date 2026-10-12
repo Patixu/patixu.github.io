@@ -3,18 +3,13 @@
 <head>
 	<meta charset="utf-8">
 	<title>Friday Night Funkin'</title>
-	
+
 	<meta id="viewport" name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 	<meta name="apple-mobile-web-app-capable" content="yes">
-	
+
 	<link rel="shortcut icon" type="image/png" href="./favicon.png">
 
-	<!--
-	  CONTROLE DE SOM — precisa vir ANTES do Funkin.js.
-	  Registra todo áudio que o jogo criar (Web Audio e <audio>/new Audio) para poder
-	  suspender ao sair da WebView e retomar ao voltar, sem destruir nada.
-	  Para depurar, use ?debug na URL do iframe: aparece um texto no canto da tela.
-	-->
+	<!-- CONTROLE DE SOM (DEVE VIR ANTES DO Funkin.js) -->
 	<script>
 	(function () {
 		var DEBUG = /[?&]debug\b/.test(location.search);
@@ -22,7 +17,7 @@
 		var medias = [];
 		var pausedMedias = [];
 		var suspended = false;
-		var needsWake = false;   // o jogo pode ter pausado e precisar de um "focus"
+		var needsWake = false;
 		var leftAt = 0;
 		var lastFocusAt = 0;
 		var flags = { hidden: false, parentHidden: false, blurred: false, stalled: false };
@@ -40,7 +35,7 @@
 			logBox.textContent = msg + ' | som ' + (suspended ? 'PARADO' : 'ligado');
 		}
 
-		// 1) Web Audio (é o que o Howler/Lime usa)
+		// 1) Web Audio (Howler/Lime)
 		var NativeContext = window.AudioContext || window.webkitAudioContext;
 		var nativeSuspend, nativeResume;
 		if (NativeContext) {
@@ -54,7 +49,6 @@
 					if (suspended) nativeSuspend.call(this).catch(noop);
 				}
 				resume() {
-					// Enquanto estamos fora de cena, ninguém (nem o Howler) pode religar o som.
 					if (suspended) return Promise.resolve();
 					return nativeResume.call(this);
 				}
@@ -63,7 +57,7 @@
 			window.webkitAudioContext = PatchedContext;
 		}
 
-		// 2) <audio> e new Audio(): guarda cada elemento que tocar
+		// 2) <audio> e new Audio()
 		var nativePlay = HTMLMediaElement.prototype.play;
 		HTMLMediaElement.prototype.play = function () {
 			if (medias.indexOf(this) === -1) medias.push(this);
@@ -106,8 +100,6 @@
 			needsWake = true;
 		}
 
-		// Ao voltar: se o jogo pausou no blur e a WebView não mandou o "focus",
-		// dispara um para ele retomar (se o focus real chegar antes, não faz nada).
 		function returned() {
 			if (!needsWake) return;
 			setTimeout(function () {
@@ -120,7 +112,7 @@
 			}, 400);
 		}
 
-		// 3) Sai de cena: troca de app, tela bloqueada, WebView fechada, perda de foco
+		// 3) Eventos de saída e perda de foco
 		document.addEventListener('visibilitychange', function () {
 			flags.hidden = document.hidden;
 			if (flags.hidden) leave(); else returned();
@@ -153,7 +145,7 @@
 			apply(); log('focus');
 		});
 
-		// Aviso da página de fora (o iframe nem sempre recebe o evento sozinho).
+		// 4) Recebe comando postMessage do iframe pai (index.html da raiz)
 		window.addEventListener('message', function (e) {
 			var d = e.data;
 			if (e.source !== window.parent || !d || d.type !== 'visibility') return;
@@ -163,7 +155,6 @@
 			log('pai ' + (flags.parentHidden ? 'oculto' : 'visivel'));
 		});
 
-		// Qualquer toque/tecla prova que o jogador está de volta: limpa o "blur".
 		['pointerdown', 'touchstart', 'keydown'].forEach(function (name) {
 			document.addEventListener(name, function () {
 				if (flags.blurred && !document.hidden && !flags.parentHidden) {
@@ -173,8 +164,7 @@
 			}, { capture: true, passive: true });
 		});
 
-		// 4) Vigia: se a tela parar de renderizar por mais de 2 s (WebView escondida
-		//    sem disparar evento nenhum), silencia. Só mexe no som, nunca no jogo.
+		// Monitor de inatividade de renderização (tela travada/escondida)
 		var lastBeat = performance.now();
 		(function beat() {
 			lastBeat = performance.now();
@@ -193,7 +183,7 @@
 	</script>
 
 	<script type="text/javascript" src="./Funkin.js"></script>
-	
+
 	<style>
 		html, body { 
 			margin: 0; 
@@ -255,9 +245,9 @@
 </head>
 <body>
 	<noscript>This webpage makes extensive use of JavaScript. Please enable JavaScript in your web browser to view this page.</noscript>
-	
+
 	<div id="openfl-content"></div>
-	
+
 	<script type="text/javascript">
 		lime.embed ("Funkin", "openfl-content", 0, 0, { parameters: {} });
 	</script>
