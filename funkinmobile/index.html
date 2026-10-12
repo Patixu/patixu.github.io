@@ -29,22 +29,26 @@
 <body>
 
 <div id="game">
-    <iframe src="game/index.html" scrolling="no" frameborder="no" allow="autoplay; fullscreen *;"></iframe>
+    <iframe id="game-frame" src="game/index.html?v=2" scrolling="no" frameborder="no" allow="autoplay; fullscreen *;"></iframe>
 </div>
 
-<!-- Pausa o som se o usuário sair da janela do WhatsApp -->
+<!-- Avisa o jogo (iframe) quando o usuário sai ou volta para a janela do WhatsApp -->
 <script>
-  function silenceAllAudio() {
-    document.querySelectorAll("audio, video").forEach(media => {
-      media.pause();
-      media.muted = true;
-    });
-  }
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) silenceAllAudio();
-  });
-  window.addEventListener("blur", silenceAllAudio);
-  window.addEventListener("pagehide", silenceAllAudio);
+(function () {
+    var frame = document.getElementById('game-frame');
+
+    function notify(hidden) {
+        try {
+            frame.contentWindow.postMessage({ type: 'visibility', hidden: hidden }, '*');
+        } catch (e) {}
+    }
+
+    // Sem "blur" de propósito: ao tocar no iframe o foco passa para ele,
+    // e a janela de fora receberia blur mesmo com o jogador jogando.
+    document.addEventListener('visibilitychange', function () { notify(document.hidden); });
+    window.addEventListener('pagehide', function () { notify(true); });
+    window.addEventListener('pageshow', function () { notify(document.hidden); });
+})();
 </script>
 
 </body>
