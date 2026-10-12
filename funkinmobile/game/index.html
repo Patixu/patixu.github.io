@@ -8,6 +8,190 @@
 	<meta name="apple-mobile-web-app-capable" content="yes">
 	
 	<link rel="shortcut icon" type="image/png" href="./favicon.png">
+
+	<!--
+	  CONTROLE DE SOM — precisa vir ANTES do Funkin.js.
+	  Registra todo áudio que o jogo criar (Web Audio e <audio>/new Audio) para poder
+	  suspender ao sair da WebView e retomar ao voltar, sem destruir nada.
+	  Para depurar, use ?debug na URL do iframe: aparece um texto no canto da tela.
+	-->
+	<script>
+	(function () {
+		var DEBUG = /[?&]debug\b/.test(location.search);
+		var contexts = [];
+		var medias = [];
+		var pausedMedias = [];
+		var suspended = false;
+		var needsWake = false;   // o jogo pode ter pausado e precisar de um "focus"
+		var leftAt = 0;
+		var lastFocusAt = 0;
+		var flags = { hidden: false, parentHidden: false, blurred: false, stalled: false };
+		var noop = function () {};
+
+		var logBox = null;
+		function log(msg) {
+			if (!DEBUG) return;
+			if (!logBox) {
+				logBox = document.createElement('div');
+				logBox.style.cssText = 'position:fixed;top:0;left:0;z-index:99999;color:#0f0;' +
+					'background:rgba(0,0,0,.7);font:11px monospace;padding:3px 6px;pointer-events:none';
+				(document.body || document.documentElement).appendChild(logBox);
+			}
+			logBox.textContent = msg + ' | som ' + (suspended ? 'PARADO' : 'ligado');
+		}
+
+		// 1) Web Audio (é o que o Howler/Lime usa)
+		var NativeContext = window.AudioContext || window.webkitAudioContext;
+		var nativeSuspend, nativeResume;
+		if (NativeContext) {
+			nativeSuspend = NativeContext.prototype.suspend;
+			nativeResume = NativeContext.prototype.resume;
+
+			var PatchedContext = class extends NativeContext {
+				constructor() {
+					super(...arguments);
+					contexts.push(this);
+					if (suspended) nativeSuspend.call(this).catch(noop);
+				}
+				resume() {
+					// Enquanto estamos fora de cena, ninguém (nem o Howler) pode religar o som.
+					if (suspended) return Promise.resolve();
+					return nativeResume.call(this);
+				}
+			};
+			window.AudioContext = PatchedContext;
+			window.webkitAudioContext = PatchedContext;
+		}
+
+		// 2) <audio> e new Audio(): guarda cada elemento que tocar
+		var nativePlay = HTMLMediaElement.prototype.play;
+		HTMLMediaElement.prototype.play = function () {
+			if (medias.indexOf(this) === -1) medias.push(this);
+			if (suspended) return Promise.resolve();
+			return nativePlay.apply(this, arguments);
+		};
+
+		function playSafely(media) {
+			var result = nativePlay.call(media);
+			if (result && result.catch) result.catch(noop);
+		}
+
+		function suspendAll() {
+			if (suspended) return;
+			suspended = true;
+			contexts.forEach(function (c) {
+				if (c.state === 'running') nativeSuspend.call(c).catch(noop);
+			});
+			pausedMedias = medias.filter(function (m) { return !m.paused; });
+			pausedMedias.forEach(function (m) { m.pause(); });
+		}
+
+		function resumeAll() {
+			if (!suspended) return;
+			suspended = false;
+			contexts.forEach(function (c) {
+				if (c.state === 'suspended') nativeResume.call(c).catch(noop);
+			});
+			pausedMedias.forEach(playSafely);
+			pausedMedias = [];
+		}
+
+		function apply() {
+			var out = flags.hidden || flags.parentHidden || flags.blurred || flags.stalled;
+			if (out) suspendAll(); else resumeAll();
+		}
+
+		function leave() {
+			if (!needsWake) leftAt = Date.now();
+			needsWake = true;
+		}
+
+		// Ao voltar: se o jogo pausou no blur e a WebView não mandou o "focus",
+		// dispara um para ele retomar (se o focus real chegar antes, não faz nada).
+		function returned() {
+			if (!needsWake) return;
+			setTimeout(function () {
+				if (!needsWake) return;
+				needsWake = false;
+				if (lastFocusAt < leftAt && !document.hidden) {
+					window.dispatchEvent(new Event('focus'));
+					log('focus enviado');
+				}
+			}, 400);
+		}
+
+		// 3) Sai de cena: troca de app, tela bloqueada, WebView fechada, perda de foco
+		document.addEventListener('visibilitychange', function () {
+			flags.hidden = document.hidden;
+			if (flags.hidden) leave(); else returned();
+			apply();
+			log('visibilitychange ' + (flags.hidden ? 'oculto' : 'visivel'));
+		});
+		window.addEventListener('pagehide', function () {
+			flags.hidden = true; leave(); apply(); log('pagehide');
+		});
+		window.addEventListener('pageshow', function () {
+			flags.hidden = document.hidden;
+			if (!flags.hidden) returned();
+			apply(); log('pageshow');
+		});
+		document.addEventListener('freeze', function () {
+			flags.hidden = true; leave(); apply(); log('freeze');
+		});
+		document.addEventListener('resume', function () {
+			flags.hidden = document.hidden;
+			if (!flags.hidden) returned();
+			apply(); log('resume');
+		});
+		window.addEventListener('blur', function () {
+			flags.blurred = true; leave(); apply(); log('blur');
+		});
+		window.addEventListener('focus', function () {
+			lastFocusAt = Date.now();
+			flags.blurred = false;
+			flags.hidden = document.hidden;
+			apply(); log('focus');
+		});
+
+		// Aviso da página de fora (o iframe nem sempre recebe o evento sozinho).
+		window.addEventListener('message', function (e) {
+			var d = e.data;
+			if (e.source !== window.parent || !d || d.type !== 'visibility') return;
+			flags.parentHidden = !!d.hidden;
+			if (flags.parentHidden) leave(); else returned();
+			apply();
+			log('pai ' + (flags.parentHidden ? 'oculto' : 'visivel'));
+		});
+
+		// Qualquer toque/tecla prova que o jogador está de volta: limpa o "blur".
+		['pointerdown', 'touchstart', 'keydown'].forEach(function (name) {
+			document.addEventListener(name, function () {
+				if (flags.blurred && !document.hidden && !flags.parentHidden) {
+					flags.blurred = false;
+					apply(); returned(); log('toque');
+				}
+			}, { capture: true, passive: true });
+		});
+
+		// 4) Vigia: se a tela parar de renderizar por mais de 2 s (WebView escondida
+		//    sem disparar evento nenhum), silencia. Só mexe no som, nunca no jogo.
+		var lastBeat = performance.now();
+		(function beat() {
+			lastBeat = performance.now();
+			requestAnimationFrame(beat);
+		})();
+		setInterval(function () {
+			var nowStalled = performance.now() - lastBeat > 2000;
+			if (nowStalled !== flags.stalled) {
+				flags.stalled = nowStalled;
+				if (!nowStalled) flags.hidden = document.hidden;
+				apply();
+				log(nowStalled ? 'tela parada' : 'tela voltou');
+			}
+		}, 500);
+	})();
+	</script>
+
 	<script type="text/javascript" src="./Funkin.js"></script>
 	
 	<style>
@@ -76,42 +260,6 @@
 	
 	<script type="text/javascript">
 		lime.embed ("Funkin", "openfl-content", 0, 0, { parameters: {} });
-	</script>
-
-	<!-- Script de intercepção e corte imediato de áudio na WebView -->
-	<script>
-		function killAllAudio() {
-			// 1. Pausa e silencia qualquer elemento HTML5 de áudio/vídeo
-			document.querySelectorAll("audio, video").forEach(el => {
-				el.pause();
-				el.currentTime = 0;
-				el.muted = true;
-			});
-
-			// 2. Tenta suspender contextos do Web Audio API ativos
-			if (window.AudioContext || window.webkitAudioContext) {
-				try {
-					if (window.Howler && typeof window.Howler.unload === 'function') {
-						window.Howler.unload();
-					}
-				} catch (e) {}
-			}
-
-			// 3. Força o elemento do jogo a pausar se houver API global do OpenFL/Flixel
-			try {
-				if (window.FlxG && window.FlxG.sound) {
-					window.FlxG.sound.muted = true;
-				}
-			} catch (e) {}
-		}
-
-		// Dispara imediatamente assim que o usuário fecha a WebView ou sai da página interna
-		document.addEventListener("visibilitychange", () => {
-			if (document.hidden) killAllAudio();
-		});
-		window.addEventListener("blur", killAllAudio);
-		window.addEventListener("pagehide", killAllAudio);
-		window.addEventListener("beforeunload", killAllAudio);
 	</script>
 </body>
 </html>
